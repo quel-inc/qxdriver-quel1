@@ -17,7 +17,7 @@ dependencies = [
     "plotly >= 5.0",
     "tqdm >= 4.0",
     "pyyaml >= 6.0",
-    "quel_ic_config >= 0.10, < 0.11",
+    "quel_ic_config >= 0.11, < 0.12",
 ]
 
 [dependency-groups]
