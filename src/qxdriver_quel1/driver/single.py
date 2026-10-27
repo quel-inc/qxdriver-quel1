@@ -6,7 +6,7 @@ from collections import defaultdict
 from types import MappingProxyType
 from typing import Any, Final, Literal, NamedTuple, TypeAlias, cast
 
-from quel_ic_config import Quel1Box
+from quel_ic_config import Quel1Box, TaskAbandonedError
 from quel_ic_config.quel1_wave_subsystem import CaptureReturnCode
 
 from qxdriver_quel1.e7awg.compat import CaptureParam, WaveSequence
@@ -308,8 +308,7 @@ class Action:
         triggered_futures = futures.get(_TRIGGERED_CAPTURE_KEY)
         if triggered_futures is not None:
             cap_task, gen_task = cast(tuple[Any, Any], triggered_futures)
-            gen_task.result()
-            readers = cap_task.result()
+            readers = self._wait_triggered_shot(cap_task, gen_task)
             for (port, runit), reader in readers.items():
                 status[port] = CaptureReturnCode.SUCCESS
                 data[(port, runit)] = read_capture_result(
@@ -329,6 +328,31 @@ class Action:
                     self._cprms[RunitId(port=port, runit=runit)],
                 )
         return status, data
+
+    @staticmethod
+    def _wait_triggered_shot(cap_task: Any, gen_task: Any) -> Any:
+        """
+        Wait for both tasks of a triggered shot and return the capture readers.
+
+        A failure of one task makes the other raise `TaskAbandonedError` with
+        the failure as its cause, so the failure itself is raised instead. The
+        capture failure is preferred when both have failed, so that
+        `E7awgCaptureDataError` reaches the caller unwrapped.
+        """
+        gen_error: Exception | None = None
+        try:
+            gen_task.result()
+        except Exception as e:  # noqa: BLE001
+            gen_error = e
+        try:
+            readers = cap_task.result()
+        except TaskAbandonedError:
+            if gen_error is None:
+                raise
+        else:
+            if gen_error is None:
+                return readers
+        raise gen_error
 
     def action(
         self,
