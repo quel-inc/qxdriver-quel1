@@ -19,7 +19,7 @@ from qxdriver_quel1.clockmaster.compat import (
     register_box,
 )
 
-from . import single
+from . import shots, single
 from .single import Quel1PortType
 
 logger = getLogger(__name__)
@@ -559,11 +559,26 @@ class Action:
                 return action.capture_start(timecounter=scheduled_times[name])
             return action.capture_start()
 
-        return {
-            name: _capture_future_map(name, action)
-            for name, action in self._actions.items()
-            if self.has_capture_setting(action)
-        }
+        futures: dict[str, dict[single.CaptureFutureKey, Any]] = {}
+        try:
+            for name, action in self._actions.items():
+                if self.has_capture_setting(action):
+                    futures[name] = _capture_future_map(name, action)
+        except BaseException:
+            shots.cancel_windows(self._capture_windows(futures))
+            raise
+        return futures
+
+    @staticmethod
+    def _capture_windows(
+        futures: Mapping[str, Mapping[single.CaptureFutureKey, Any]],
+    ) -> list[Any]:
+        """Return the task windows of the capture futures of all boxes."""
+        return [
+            window
+            for box_futures in futures.values()
+            for window in single.capture_windows(box_futures)
+        ]
 
     def capture_stop(
         self,
@@ -585,6 +600,7 @@ class Action:
         tuple[dict[tuple[str, Quel1PortType], CaptureReturnCode], dict[tuple[str, Quel1PortType, int], NDArray[np.complex64]]]
             Flattened status and IQ maps with box names.
         """
+        shots.wait_windows(self._capture_windows(futures))
         box_results = {
             name: self._actions[name].capture_stop(future)
             for name, future in futures.items()
@@ -634,10 +650,13 @@ class Action:
             displacement=self._quel1system.displacement
         )
         futures = self.capture_start(scheduled_times=scheduled_times)
-        self.emit_at(
-            displacement=self._quel1system.displacement,
-            scheduled_times=scheduled_times,
-        )
+        capture_windows = self._capture_windows(futures)
+        try:
+            emission_windows = self._start_emission(scheduled_times)
+        except BaseException:
+            shots.cancel_windows(capture_windows)
+            raise
+        shots.wait_windows([*capture_windows, *emission_windows])
         return self.capture_stop(futures)
 
     def _build_scheduled_times(
@@ -710,36 +729,40 @@ class Action:
         to `start_capture_by_awg_trigger(...)` and lets the hardware start that
         AWG at the shared scheduled time. Only non-triggered boxes still need
         an explicit `start_wavegen(..., timecounter=...)` reservation here.
+        The emissions are waited for together by `shots.wait_windows`.
         """
-        awgs = {
-            name: {(spec.port, spec.channel) for spec in action.wave_sequences}
-            for name, action in self._actions.items()
-        }
-        resolved_scheduled_times = (
-            dict(scheduled_times)
-            if scheduled_times is not None
-            else self._build_scheduled_times(
-                min_time_offset=min_time_offset,
-                displacement=displacement,
+        shots.wait_windows(
+            self._start_emission(
+                scheduled_times
+                if scheduled_times is not None
+                else self._build_scheduled_times(
+                    min_time_offset=min_time_offset,
+                    displacement=displacement,
+                )
             )
         )
-        tasks = []
-        for name, action in self._actions.items():
-            if action.trigger_settings or not action.wave_sequences:
-                continue
-            scheduled_time = resolved_scheduled_times[name]
-            tasks.append(
-                action.box.start_wavegen(awgs[name], timecounter=scheduled_time)
-            )
-            logger.info(
-                "reserving emission of %s at %s : base_time=%s, timediff=%s, timing_shift=%s",
-                name,
-                scheduled_time,
-                scheduled_time
-                - self._estimated_timediff[name]
-                - self._quel1system.timing_shift[name],
-                self._estimated_timediff[name],
-                self._quel1system.timing_shift[name],
-            )
-        for task in tasks:
-            task.result()
+
+    def _start_emission(self, scheduled_times: Mapping[str, int]) -> list[Any]:
+        """Reserve the emissions of non-triggered boxes and return their windows."""
+        tasks: list[Any] = []
+        try:
+            for name, action in self._actions.items():
+                if action.trigger_settings or not action.wave_sequences:
+                    continue
+                scheduled_time = scheduled_times[name]
+                awgs = {(spec.port, spec.channel) for spec in action.wave_sequences}
+                tasks.append(action.box.start_wavegen(awgs, timecounter=scheduled_time))
+                logger.info(
+                    "reserving emission of %s at %s : base_time=%s, timediff=%s, timing_shift=%s",
+                    name,
+                    scheduled_time,
+                    scheduled_time
+                    - self._estimated_timediff[name]
+                    - self._quel1system.timing_shift[name],
+                    self._estimated_timediff[name],
+                    self._quel1system.timing_shift[name],
+                )
+        except BaseException:
+            shots.cancel_windows(tasks)
+            raise
+        return tasks

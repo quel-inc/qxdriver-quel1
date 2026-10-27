@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, Final, Literal, NamedTuple, TypeAlias, cast
 
@@ -13,12 +14,26 @@ from quel_ic_config.quel1_wave_subsystem import CaptureReturnCode
 
 from qxdriver_quel1.e7awg.compat import CaptureParam, WaveSequence
 
+from . import shots
 from .compat import convert_captureparam, convert_wavesequence, reader_to_flat_wave
 
 Quel1PortType: TypeAlias = int | tuple[int, int]
 _TriggeredCaptureKey: TypeAlias = Literal["__triggered__"]
 CaptureFutureKey: TypeAlias = Quel1PortType | _TriggeredCaptureKey
 _TRIGGERED_CAPTURE_KEY: Final[_TriggeredCaptureKey] = "__triggered__"
+
+
+def capture_windows(futures: Mapping[CaptureFutureKey, Any]) -> list[Any]:
+    """
+    Return the task windows in a future map returned by `capture_start`.
+
+    The capture window of a triggered shot comes before its AWG window, as
+    `shots.wait_windows` expects.
+    """
+    windows: list[Any] = []
+    for value in futures.values():
+        windows.extend(value if isinstance(value, tuple) else (value,))
+    return windows
 
 
 class AwgId(NamedTuple):
@@ -264,12 +279,16 @@ class Action:
                 )
             return {_TRIGGERED_CAPTURE_KEY: (cap_task, gen_task)}
 
-        return {
-            port: self._box.start_capture_now(
-                {(port, runit) for runit in runits},
-            )
-            for port, runits in runits_by_ports.items()
-        }
+        futures: dict[CaptureFutureKey, Any] = {}
+        try:
+            for port, runits in runits_by_ports.items():
+                futures[port] = self._box.start_capture_now(
+                    {(port, runit) for runit in runits},
+                )
+        except BaseException:
+            shots.cancel_windows(capture_windows(futures))
+            raise
+        return futures
 
     def start_emission(self) -> None:
         """Start wave generation when AWG settings exist."""
@@ -288,6 +307,10 @@ class Action:
         """
         Resolve capture futures and return status/data maps.
 
+        All the shots are waited for together by `shots.wait_windows`: when
+        one of them fails, the others are cancelled, and the failure is raised
+        rather than the abandonment it causes.
+
         Parameters
         ----------
         futures : dict[CaptureFutureKey, Any]
@@ -298,15 +321,14 @@ class Action:
         tuple[dict[Quel1PortType, CaptureReturnCode], dict[tuple[Quel1PortType, int], NDArray[np.complex64]]]
             Flattened status and IQ data maps.
         """
+        shots.wait_windows(capture_windows(futures))
         status: dict[Quel1PortType, CaptureReturnCode] = {}
         data: dict[tuple[Quel1PortType, int], npt.NDArray[np.complex64]] = {}
 
         triggered_futures = futures.get(_TRIGGERED_CAPTURE_KEY)
         if triggered_futures is not None:
-            cap_task, gen_task = cast(tuple[Any, Any], triggered_futures)
-            gen_task.result()
-            readers = cap_task.result()
-            for (port, runit), reader in readers.items():
+            cap_task, _ = cast(tuple[Any, Any], triggered_futures)
+            for (port, runit), reader in cap_task.result().items():
                 status[port] = CaptureReturnCode.SUCCESS
                 data[(port, runit)] = reader_to_flat_wave(reader)
             return status, data
@@ -314,9 +336,8 @@ class Action:
         for port, future in futures.items():
             if port == _TRIGGERED_CAPTURE_KEY:
                 continue
-            readers = future.result()
             status[port] = CaptureReturnCode.SUCCESS
-            for (_, runit), reader in readers.items():
+            for (_, runit), reader in future.result().items():
                 data[(port, runit)] = reader_to_flat_wave(reader)
         return status, data
 

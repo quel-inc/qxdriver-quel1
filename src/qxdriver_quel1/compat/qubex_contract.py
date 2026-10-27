@@ -40,6 +40,8 @@ REQUIRED_EXPORT_NAMES: Final[tuple[str, ...]] = (
     "Skew",
     "TriggerSetting",
     "WaveSequenceTools",
+    "cancel_windows",
+    "wait_windows",
 )
 
 

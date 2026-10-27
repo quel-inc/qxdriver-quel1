@@ -36,6 +36,8 @@ from qxdriver_quel1.compat.exports import (
     Skew,
     TriggerSetting,
     WaveSequenceTools,
+    cancel_windows,
+    wait_windows,
 )
 
 __all__ = [
@@ -71,6 +73,8 @@ __all__ = [
     "Skew",
     "TriggerSetting",
     "WaveSequenceTools",
+    "cancel_windows",
+    "wait_windows",
 ]
 
 # Import side-effect keeps qubex-facing contract checks active at compat import time.
