@@ -8,6 +8,7 @@ from typing import Any, Final, cast
 from quel_ic_config import Quel1Box, Quel1BoxType
 
 from qxdriver_quel1.clockmaster.compat import (
+    ClockMaster,
     QuBEMasterClient,
     SequencerClient,
     register_box,
@@ -32,7 +33,7 @@ class BoxPool:
     DEFAULT_NUM_SYSREF_MEASUREMENTS: Final[int] = 100
 
     def __init__(self) -> None:
-        self._clock_master: QuBEMasterClient | None = None
+        self._clock_master: ClockMaster | None = None
         self._boxes: dict[str, tuple[Quel1Box, SequencerClient]] = {}
         self._linkstatus: dict[str, bool] = {}
         self._estimated_timediff: dict[str, int] = {}
@@ -41,8 +42,8 @@ class BoxPool:
         self._box_config_cache: dict[str, dict] = {}
 
     @property
-    def clock_master(self) -> QuBEMasterClient | None:
-        """Return the configured clock master client."""
+    def clock_master(self) -> ClockMaster | None:
+        """Return the configured clock master."""
         return self._clock_master
 
     @property
@@ -98,6 +99,18 @@ class BoxPool:
     ) -> None:
         """Create a clock-master client."""
         self._clock_master = QuBEMasterClient(master_ipaddr=ipaddr)
+
+    def set_clock_master(self, master: ClockMaster) -> None:
+        """
+        Use a clock master created by the caller.
+
+        Parameters
+        ----------
+        master : ClockMaster
+            Clock master, e.g., `quel_ic_config.QuelClockMasterV1`, which the
+            caller keeps owning.
+        """
+        self._clock_master = master
 
     def measure_timediff(
         self, num_iters: int = DEFAULT_NUM_SYSREF_MEASUREMENTS

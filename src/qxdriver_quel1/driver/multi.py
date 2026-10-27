@@ -14,7 +14,7 @@ from quel_ic_config import Quel1Box
 from quel_ic_config.quel1_wave_subsystem import CaptureReturnCode
 
 from qxdriver_quel1.clockmaster.compat import (
-    QuBEMasterClient,
+    ClockMaster,
     SequencerClient,
     register_box,
 )
@@ -44,10 +44,10 @@ class Quel1System:
 
     def __init__(
         self,
-        clockmaster: QuBEMasterClient,
+        clockmaster: ClockMaster,
         boxes: MappingProxyType[str, Quel1Box],
     ) -> None:
-        self._clockmaster: Final[QuBEMasterClient] = clockmaster
+        self._clockmaster: Final[ClockMaster] = clockmaster
         self._boxes: Final[MappingProxyType[str, Quel1Box]] = boxes
         self.displacement: int = 0
         self.timing_shift: Final[dict[str, int]] = dict.fromkeys(boxes, 0)
@@ -63,7 +63,7 @@ class Quel1System:
     def create(
         cls,
         *,
-        clockmaster: QuBEMasterClient,
+        clockmaster: ClockMaster,
         boxes: list[Quel1Box | NamedBox],
         update_copnfig_cache: bool = True,
     ) -> Quel1System:
@@ -72,8 +72,9 @@ class Quel1System:
 
         Parameters
         ----------
-        clockmaster : QuBEMasterClient
-            Clock-master client.
+        clockmaster : ClockMaster
+            Clock master, e.g., `quel_ic_config.QuelClockMasterV1` or
+            `QuBEMasterClient`.
         boxes : list[Quel1Box | NamedBox]
             Boxes to include.
         update_copnfig_cache : bool, optional
@@ -122,14 +123,14 @@ class Quel1System:
         return self._boxes
 
     @property
-    def clockmaster(self) -> QuBEMasterClient:
+    def clockmaster(self) -> ClockMaster:
         """
-        Return the clock-master client.
+        Return the clock master.
 
         Returns
         -------
-        QuBEMasterClient
-            Clock-master client.
+        ClockMaster
+            Clock master.
         """
         return self._clockmaster
 
@@ -175,12 +176,12 @@ class Quel1System:
         if not box_names:
             box_names = tuple(self.boxes.keys())
         master = self.clockmaster
-        master.kick_clock_synch(
-            [str(self.box[name].wss.ipaddr_sss) for name in box_names]
-        )
-        return [(name, self.read_clock(name)) for name in box_names] + [
-            master.read_clock()
-        ]
+        master.sync_boxes([self.box[name] for name in box_names])
+        clocks: list[
+            tuple[bool, int] | tuple[str, MutableSequence[tuple[bool, int, int]]]
+        ] = [(name, self.read_clock(name)) for name in box_names]
+        clocks.append((True, master.get_current_timecounter()))
+        return clocks
 
     def initialize(self, *box_names: str) -> None:
         """
@@ -469,7 +470,7 @@ class Action:
             Built action.
         """
         master = quel1system.clockmaster
-        logger.info("clock of master: %s", master.read_clock())
+        logger.info("clock of master: %s", master.get_current_timecounter())
 
         actions: dict[str, single.Action] = {}
         for box_settings in settings:
