@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from functools import wraps
 from threading import RLock
 from typing import Any
 
@@ -33,6 +34,63 @@ def _line_to_reg_half(
         ],
         dtype=np.float32,
     )
+
+
+class _CompatClassificationRegFile:
+    """
+    Stand-in for `e7awghal.capunit._CapParamClassificationRegFile`.
+
+    The e7awghal of quel_ic_config 0.11 builds the classification registers
+    without the class. This temporary layer puts it back and routes the
+    register building through it, so that the scoped patch below keeps
+    working. Remove it when e7awghal accepts raw line equations.
+    """
+
+    def __init__(self) -> None:
+        self.p0 = np.zeros(3, dtype=np.float32)
+        self.p1 = np.zeros(3, dtype=np.float32)
+
+    @classmethod
+    def fromcapparam(cls, cp: Any) -> _CompatClassificationRegFile:
+        from e7awghal.classification import calc_abc_main_sub
+
+        reg_file = cls()
+        reg_file.p0, reg_file.p1 = calc_abc_main_sub(
+            cp.classification_param.pivot_x,
+            cp.classification_param.pivot_y,
+            cp.classification_param.angle_main,
+            cp.classification_param.angle_sub,
+            cp.total_exponent_offset(),
+        )
+        return reg_file
+
+
+def _install_compat_classification_reg_file() -> None:
+    try:
+        from e7awghal import capunit
+    except ImportError:  # pragma: no cover - depends on quelware extras
+        return
+    if hasattr(capunit, "_CapParamClassificationRegFile"):
+        return
+    original_build = getattr(capunit, "_build_classification_regs", None)
+    param_half = getattr(capunit, "_ClassificationParamHalf", None)
+    if original_build is None or param_half is None:
+        return
+
+    @wraps(original_build)
+    def _build_classification_regs(cp: Any) -> npt.NDArray[np.uint32]:
+        reg_file = _CompatClassificationRegFile.fromcapparam(cp)
+        param_half.validate_python(reg_file.p0)
+        param_half.validate_python(reg_file.p1)
+        t = np.hstack((reg_file.p0, reg_file.p1)).astype(np.float32)
+        return np.frombuffer(t.tobytes(), dtype=np.uint32)
+
+    target: Any = capunit
+    target._CapParamClassificationRegFile = _CompatClassificationRegFile
+    target._build_classification_regs = _build_classification_regs
+
+
+_install_compat_classification_reg_file()
 
 
 def _classification_reg_file_class() -> type:
