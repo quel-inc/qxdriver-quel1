@@ -3,14 +3,32 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Collection
 from contextlib import suppress
 from dataclasses import dataclass, field
 from threading import RLock
+from typing import Protocol
 
 from quel_ic_config import Quel1Box, QuelClockMasterV1
 
 _BOX_BY_SSS_IPADDR: dict[str, Quel1Box] = {}
 logger = logging.getLogger(__name__)
+
+
+class ClockMaster(Protocol):
+    """
+    Clock master that a `Quel1System` synchronizes its boxes with.
+
+    `quel_ic_config.QuelClockMasterV1` and `QuBEMasterClient` satisfy it.
+    """
+
+    def get_current_timecounter(self) -> int:
+        """Return the current counter of the clock master."""
+        ...
+
+    def sync_boxes(self, boxes: Collection[Quel1Box]) -> None:
+        """Synchronize the counters of the boxes given together."""
+        ...
 
 
 @dataclass
@@ -137,8 +155,31 @@ class QuBEMasterClient:
             if box is None:
                 raise RuntimeError(f"box for SSS IP {ipaddr} is not registered")
             boxes.append(box)
+        self.sync_boxes(boxes)
+
+    def sync_boxes(self, boxes: Collection[Quel1Box]) -> None:
+        """
+        Synchronize the counters of the boxes given together.
+
+        Parameters
+        ----------
+        boxes : Collection[Quel1Box]
+            Boxes to synchronize.
+        """
         with self._shared_master.lock:
             self._master.sync_boxes(boxes)
+
+    def get_current_timecounter(self) -> int:
+        """
+        Return the current counter of the clock master.
+
+        Returns
+        -------
+        int
+            Current counter.
+        """
+        with self._shared_master.lock:
+            return int(self._master.get_current_timecounter())
 
     def read_clock(self) -> tuple[bool, int]:
         """
@@ -149,9 +190,7 @@ class QuBEMasterClient:
         tuple[bool, int]
             `(success, current_counter)`.
         """
-        with self._shared_master.lock:
-            counter = int(self._master.get_current_timecounter())
-        return True, counter
+        return True, self.get_current_timecounter()
 
     def reset(self) -> bool:
         """Reset the clock master when supported by backend implementation."""
@@ -163,6 +202,7 @@ class QuBEMasterClient:
 
 
 __all__ = [
+    "ClockMaster",
     "QuBEMasterClient",
     "SequencerClient",
     "register_box",
