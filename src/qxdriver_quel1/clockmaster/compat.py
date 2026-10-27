@@ -11,7 +11,6 @@ from quel_ic_config import Quel1Box, QuelClockMasterV1
 
 _BOX_BY_SSS_IPADDR: dict[str, Quel1Box] = {}
 logger = logging.getLogger(__name__)
-_CLOCKMASTER_BOXES_ATTR = "_boxes"
 
 
 @dataclass
@@ -32,9 +31,7 @@ def _acquire_shared_clockmaster(ipaddr: str) -> _SharedClockMaster:
     with _SHARED_CLOCKMASTERS_LOCK:
         shared = _SHARED_CLOCKMASTERS.get(ipaddr)
         if shared is None:
-            shared = _SharedClockMaster(
-                master=QuelClockMasterV1(ipaddr=ipaddr, boxes=[])
-            )
+            shared = _SharedClockMaster(master=QuelClockMasterV1(ipaddr=ipaddr))
             _SHARED_CLOCKMASTERS[ipaddr] = shared
         shared.ref_count += 1
         return shared
@@ -125,11 +122,6 @@ class QuBEMasterClient:
         _release_shared_clockmaster(self._master_ipaddr, self._shared_master)
         self._closed = True
 
-    def _set_master_boxes(self, boxes: list[Quel1Box]) -> None:
-        """Update target boxes on the cached clock-master session."""
-        # `QuelClockMasterV1` does not expose a public setter for sync targets.
-        setattr(self._master, _CLOCKMASTER_BOXES_ATTR, set(boxes))
-
     def kick_clock_synch(self, box_sss_ipaddrs: list[str]) -> None:
         """
         Trigger clock synchronization across registered boxes.
@@ -146,8 +138,7 @@ class QuBEMasterClient:
                 raise RuntimeError(f"box for SSS IP {ipaddr} is not registered")
             boxes.append(box)
         with self._shared_master.lock:
-            self._set_master_boxes(boxes)
-            self._master.sync_boxes()
+            self._master.sync_boxes(boxes)
 
     def read_clock(self) -> tuple[bool, int]:
         """

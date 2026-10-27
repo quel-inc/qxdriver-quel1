@@ -15,6 +15,7 @@ from qxdriver_quel1.driver import (
     RunitSetting,
     TriggerSetting,
     multi,
+    shots,
     single,
 )
 from qxdriver_quel1.pulse import (
@@ -42,6 +43,8 @@ SingleAwgSetting = single.AwgSetting
 SingleRunitId = single.RunitId
 SingleRunitSetting = single.RunitSetting
 SingleTriggerSetting = single.TriggerSetting
+cancel_windows = shots.cancel_windows
+wait_windows = shots.wait_windows
 
 
 EXPORTS: dict[str, object] = {
@@ -77,4 +80,6 @@ EXPORTS: dict[str, object] = {
     "Skew": Skew,
     "TriggerSetting": TriggerSetting,
     "WaveSequenceTools": WaveSequenceTools,
+    "cancel_windows": cancel_windows,
+    "wait_windows": wait_windows,
 }

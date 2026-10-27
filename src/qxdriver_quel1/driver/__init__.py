@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from . import multi, single
+from . import multi, shots, single
 from .common import (
     Action,
     AwgId,
@@ -25,5 +25,6 @@ __all__ = [
     "RunitSetting",
     "TriggerSetting",
     "multi",
+    "shots",
     "single",
 ]
